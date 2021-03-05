@@ -1,0 +1,1137 @@
+/* LIBRARY INCLUDE */
+#include <SPI.h>                       //Serial Peripheral Interface 
+#include <U8g2lib.h>            //Universal 8 bit Graphic library for OLED
+#include <Wire.h>           //WIRE library
+#include <string>           //working with string
+#include <math.h>
+using namespace std;
+
+
+
+
+/* DEFINE */
+
+#define SPI_CLK 14            //CLK of OLED is connected in pin 14 of tennesy
+#define WIFI_SERIAL Serial1  //wifi is connected in serial port 1
+#define SERIAL_YES true      // SERIAL_YES is always true
+#define GPSSerial Serial3  //GPS is connected in serial port 3
+#define DELAY 30
+/* Define MACROS */
+/* CONSTANTS */
+const int LED_PIN = 13;         //LED pin in tennesy 3.2 is in PIN13
+const int BUTTON_PIN = 9;       // BUTTON is connected in PIN9
+int button_pressed_count;
+int led = 13;
+bool user_menu_select;
+String latitude;
+String longitude;
+
+ 
+/*WIFI global constants and variables*/
+const int WIFI_CONTROL_PIN = 2;
+String wifis = "";                // holds list of wifis
+String MAC = "";                  // MAC address
+String get_response ="";          // generic string to hold responses
+bool wifi_good = false;           // connected to AP
+String SSID = "Karkhana IOT";     // SSID and password
+String password = "iot@karkhana";
+bool game_over=false;
+
+U8G2_SSD1306_128X64_NONAME_F_4W_HW_SPI oled(U8G2_R2, 10, 15, 16);   //Display OLED 
+
+
+
+
+/* INITIALIZATION / SETUP */
+String getMAC(uint32_t timeout);
+String receiveData(uint32_t timeout);
+bool sendComm(String buffer, int len);
+bool startComm(String domain, int port);
+bool setMux(int m);
+String readString(String target1, String target2, String target3, uint32_t timeout);
+bool readTest(String target1, String target2, String target3, uint32_t timeout);
+void emptyRx();
+String httpComm(String domain, int port, String path, String comm);
+void printWifiResponse();
+void listWifis();
+bool connectWifi(String ssid, String password);
+void resetWifi();
+bool check();
+void wifiEnable(bool yn);
+bool intersects(Circle circle, Rect rect);
+void draw(Rect b);
+void drawBall(Circle b);
+void main_wifi_gps_GET();
+void main_game();
+void main_wifi_gps_POST();
+
+
+
+
+void setup() {
+SPI.setSCK(SPI_CLK);          // move the SPI SCK pin from default of 13  
+oled.begin();             // initializes the oled
+Serial.begin(115200);                 // Set up serial port for button
+pinMode(LED_PIN, OUTPUT);              // Set up LED on tennesy to confirm BUTTON press
+pinMode(BUTTON_PIN, INPUT_PULLUP);    // Set up Button on PIN9
+Wire.begin();         //Initiate the Wire library and join the I2C bus as a master or slave. 
+GPSSerial.begin(9600);
+ //Serial setup
+  if (SERIAL_YES) Serial.begin(9600); //number meaningless on teensy (1MBit/s)
+
+  //wifi serial setup:
+  WIFI_SERIAL.begin(115200);
+  WIFI_SERIAL.setTimeout(4000);
+  pinMode(WIFI_CONTROL_PIN,OUTPUT);
+  wifiEnable(true);
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_ncenB10_tr);
+  oled.drawStr(30,40,"WELCOME");
+  oled.sendBuffer();
+  delay(2000);
+
+
+  
+  
+  if (check()){ //if ESP8266 is present
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_10x20_tf);
+    oled.drawStr(8,30,"Setting up");
+    oled.drawStr(0,50,"our system...");
+    oled.sendBuffer();
+
+    
+    resetWifi();    //reset
+    MAC = getMAC(2000);
+    emptyRx();
+  }    
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*  MAIN LOOP */
+void loop(){
+menu_display();
+}
+
+
+
+
+
+
+
+
+
+
+
+/* VOID / MODULED */
+
+
+
+void menu_display(){              //for menu display only
+
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_ncenB10_tr);         //11 pixle toward X-axis font set   
+    oled.drawStr(0,11,"******MENU******");
+  oled.setFont(u8g2_font_glasstown_nbp_tr);   //9 pixle toward X-axis font set
+  oled.drawStr(0,20,"1. Display weather");
+  oled.drawStr(0,29,"2. GPS location");
+  oled.drawStr(0,38,"3. Peer GPS location");
+  oled.drawStr(0,47,"4. Game Demo");
+  oled.drawStr(0,56,"Button Status:");
+  oled.setCursor(65,56);
+
+  oled.print(button_pressed_count);
+  oled.sendBuffer();
+ 
+  main_button();
+  if (user_menu_select==1){
+  if(button_pressed_count==1){
+  
+  user_menu_select=0;
+  button_pressed_count=0;
+  main_wifi_weather();
+  } else if (button_pressed_count==2){
+    main_gps();
+    main_wifi_gps_POST();
+    user_menu_select=0;
+    button_pressed_count=0;
+  }else if (button_pressed_count==3){
+  main_wifi_gps_GET();
+  user_menu_select=0;
+  button_pressed_count=0;
+  }else if (button_pressed_count==4){
+  main_game();
+  user_menu_select=0;
+  button_pressed_count=0;
+  }  
+  }
+  
+  
+}
+
+
+
+/* (START POINT) FOR BUTTON ONLY*/
+
+class Button{
+  public:
+    elapsedMillis t_since_state_2;
+    elapsedMillis t_since_change;    
+    unsigned long debounce_time;
+    unsigned long long_press_time;
+    int pin;
+    int flag;
+    bool button_pressed;
+  public:
+    int state; // This is public for the sake of convenience
+    Button(int p) {
+      flag = 0;  
+      state = 0;
+      pin = p;
+      t_since_state_2 = 0;
+      t_since_change = 0;
+      debounce_time = 10;
+      long_press_time = 1000;
+      button_pressed = 0;
+    }
+    void read() {
+      int button_state = digitalRead(pin);  
+      button_pressed = !button_state;
+    }
+int update() {
+  read();
+  flag = 0;
+  if (state==0) { // Unpressed, rest state
+    if (button_pressed) {
+      state = 1;
+      t_since_change = 0;
+    }
+  } else if (state==1) { //Tentative pressed
+    if (!button_pressed) {
+      state = 0;
+      t_since_change = 0;
+    } else if (t_since_change >= debounce_time) {
+      state = 2;
+      t_since_state_2 = 0;
+    }
+  } else if (state==2) { // Short press
+    if (!button_pressed) {
+      state = 4;
+      t_since_change = 0;
+    } else if (t_since_state_2 >= long_press_time) {
+      state = 3;
+    }
+  } else if (state==3) { //Long press
+    if (!button_pressed) {
+      state = 4;
+      t_since_change = 0;
+    }
+  } else if (state==4) { //Tentative unpressed
+    if (button_pressed && t_since_state_2 < long_press_time) {
+      state = 2; // Unpress was temporary, return to short press
+      t_since_change = 0;
+    } else if (button_pressed && t_since_state_2 >= long_press_time) {
+      state = 3; // Unpress was temporary, return to long press
+      t_since_change = 0;
+    } else if (t_since_change >= debounce_time) { // A full button push is complete
+      state = 0;
+      if (t_since_state_2 < long_press_time) { // It is a short press
+        flag = 1;
+      } else {  // It is a long press
+        flag = 2;
+      }
+    }
+  }
+  return flag;
+} 
+};
+Button button(BUTTON_PIN);
+void led_blink(){
+  digitalWrite(led, HIGH);   // turn the LED on (HIGH is the voltage level)
+  delay(500);               // wait for a second
+  digitalWrite(led, LOW);    // turn the LED off by making the voltage LOW
+  delay(500); 
+}
+
+void main_button(){
+
+
+
+int flag = button.update();
+  Serial.println(flag);
+  if (flag==1) {
+  led_blink();
+  button_pressed_count += 1;   
+  delay(1);
+ } else if (flag==2) {
+  led_blink();
+  led_blink();
+  
+  
+  user_menu_select = 1;
+  
+    delay(1);    
+  } else if (button_pressed_count>4) {
+ 
+ button_pressed_count = 0;
+} else {
+}
+}
+
+
+
+
+
+/* (END POINT) FOR BUTTON ONLY*/
+
+/* (START POINT) FOR WIFI_WEATHER CONNECTIONS */
+
+void main_wifi_weather (){
+
+  if (wifi_good != true){   //if we're not connected to a network
+    if (check()){       //if ESP8266 present
+      listWifis();        
+      if (SERIAL_YES) Serial.println(wifis);
+
+      bool good = connectWifi(SSID,password); //connect to network
+
+      if (good){
+       
+        wifi_good = true; // connected to a network
+      }else{
+        wifi_good=false;
+      }
+    }
+  }
+    
+
+  if (wifi_good){   //if we're connected to a network
+  
+    // web server parameters
+    String domain = "45.118.134.33";
+    int port = 80;
+    String path = "/data?user=oskarkrishnashrestha&filename=weatherpy.py&lon=85.331598&lat=27.708728";
+
+    // send a GET command, will return weather info
+    String send_comm = 
+    "GET "+ path + " HTTP/1.1\r\n" +
+    "Host: " + domain + "\r\n\r\n";
+
+    get_response = httpComm(domain, port, path, send_comm);
+    if (SERIAL_YES) Serial.println(get_response);
+    
+       
+    
+    int main_start = get_response.indexOf("<")+6;
+    int main_end = get_response.indexOf("!");
+    int description_start= get_response.indexOf("@")+1;
+    int description_end= get_response.indexOf("$");
+    int temp_start = description_end + 3;
+    int temp_end =get_response.indexOf("%");
+    int humidity_start = temp_end + 3;
+    int humidity_end = get_response.indexOf("^");
+    int visibility_start = humidity_end + 3;
+    int visibility_end = get_response.indexOf("&");
+    int wind_start = visibility_end + 3;
+    int wind_end = get_response.indexOf("*");
+    int place_start = wind_end + 3;
+    int place_end = get_response.indexOf("!!");
+        
+    
+    
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_glasstown_nbp_tr);
+    oled.drawStr(25,30,"Loading the information");
+    oled.drawStr(45,50,"form api... ");
+    oled.sendBuffer();
+    delay(3500);
+
+    String main = get_response.substring(main_start,main_end);
+    String description = get_response.substring(description_start, description_end);
+    String temperature = get_response.substring(temp_start,temp_end);
+    String visibility = get_response.substring(visibility_start,visibility_end);
+    String wind = get_response.substring(wind_start,wind_end);
+    
+    String location = get_response.substring(place_start,place_end);
+    
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_glasstown_nbp_tr);  
+    oled.setCursor(0,11);
+    oled.print(main);
+    oled.setCursor(0,20);
+    oled.print(description);   
+    oled.setCursor(0,29);
+    oled.print(temperature);
+    oled.setCursor(0,38);
+    oled.print(visibility);
+    oled.setCursor(0,47);
+    oled.print(wind);
+    oled.setCursor(0,58);
+    oled.print(location);
+   
+    oled.sendBuffer();     // update the screen
+
+    delay(20000);
+    }  
+}
+
+/*(END POINT) FOR WIFI_WEATHER CONNECTION  */
+/*(START POINT) FOR WIFI_GPS CONNECTION */
+void main_wifi_gps (){
+
+  if (wifi_good != true){   //if we're not connected to a network
+    if (check()){       //if ESP8266 present
+      listWifis();        
+      if (SERIAL_YES) Serial.println(wifis);
+
+      bool good = connectWifi(SSID,password); //connect to network
+
+      if (good){
+       
+        wifi_good = true; // connected to a network
+      }else{
+        wifi_good=false;
+      }
+    }
+  }
+    
+
+  if (wifi_good){   //if we're connected to a network
+  
+    // web server parameters
+    String domain = "45.118.134.33";
+    int port = 80;
+    String path = "/data?user=oskarkrishnashrestha&filename=weatherpy.py&lon=85.331598&lat=27.708728";
+
+    // send a GET command, will return weather info
+    String send_comm = 
+    "GET "+ path + " HTTP/1.1\r\n" +
+    "Host: " + domain + "\r\n\r\n";
+
+    get_response = httpComm(domain, port, path, send_comm);
+    if (SERIAL_YES) Serial.println(get_response);
+    
+       
+    
+    int main_start = get_response.indexOf("<")+6;
+    int main_end = get_response.indexOf("!");
+    int description_start= get_response.indexOf("@")+1;
+    int description_end= get_response.indexOf("$");
+    int temp_start = description_end + 3;
+    int temp_end =get_response.indexOf("%");
+    int humidity_start = temp_end + 3;
+    int humidity_end = get_response.indexOf("^");
+    int visibility_start = humidity_end + 3;
+    int visibility_end = get_response.indexOf("&");
+    int wind_start = visibility_end + 3;
+    int wind_end = get_response.indexOf("*");
+    int place_start = wind_end + 3;
+    int place_end = get_response.indexOf("!!");
+        
+    
+    
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_glasstown_nbp_tr);
+    oled.drawStr(25,30,"Loading the information");
+    oled.drawStr(45,50,"form api... ");
+    oled.sendBuffer();
+    delay(3500);
+
+    String main = get_response.substring(main_start,main_end);
+    String description = get_response.substring(description_start, description_end);
+    String temperature = get_response.substring(temp_start,temp_end);
+    String visibility = get_response.substring(visibility_start,visibility_end);
+    String wind = get_response.substring(wind_start,wind_end);
+    
+    String location = get_response.substring(place_start,place_end);
+    
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_glasstown_nbp_tr);  
+    oled.setCursor(0,11);
+    oled.print(main);
+    oled.setCursor(0,20);
+    oled.print(description);   
+    oled.setCursor(0,29);
+    oled.print(temperature);
+    oled.setCursor(0,38);
+    oled.print(visibility);
+    oled.setCursor(0,47);
+    oled.print(wind);
+    oled.setCursor(0,58);
+    oled.print(location);
+   
+    oled.sendBuffer();     // update the screen
+
+    delay(10000);
+    }  
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*(END POINT) FOR WIFI GPS CONNECTION */
+///Wifi Functions:
+void wifiEnable(bool yn){
+  digitalWrite(WIFI_CONTROL_PIN,LOW);
+  if (yn){
+    delay(250);
+    digitalWrite(WIFI_CONTROL_PIN,HIGH);
+    delay(1000);
+  } 
+}
+
+
+bool check() {
+    emptyRx();
+    WIFI_SERIAL.println("AT");
+    if (SERIAL_YES){
+      Serial.println("checking...");
+      
+      
+    }
+    boolean ok = false;
+    if (WIFI_SERIAL.find("OK")) {
+        if (SERIAL_YES) Serial.println("ESP8266 present");
+        ok = true;
+       
+    }
+    return ok;
+}
+
+
+void resetWifi() {
+  // set station mode
+    WIFI_SERIAL.println("AT+CWMODE=1");
+    delay(500);//give some breathing room
+    WIFI_SERIAL.println("AT+RST"); //reset required to take effect
+    delay(500);
+    if (WIFI_SERIAL.find("ready")){
+      if (SERIAL_YES) Serial.println("ESP8266 restarted and ready");
+    }
+    printWifiResponse();
+}
+
+
+bool connectWifi(String ssid, String password) {
+    emptyRx();
+    String cmd = "AT+CWJAP=\"" + ssid + "\",\"" + password + "\"";
+    WIFI_SERIAL.println(cmd);
+    unsigned long start = millis();
+    String response="";
+    
+    while (millis() - start <9000){ //probably can rewrite this thing if needed.
+      if (WIFI_SERIAL.available()){
+        char c = WIFI_SERIAL.read();
+        if (SERIAL_YES) Serial.print(c);
+        response = String(response+c);
+      }
+      if (response.indexOf("OK") != -1){
+        break;
+      }
+    }
+    if(response.indexOf("OK") !=-1) {
+        WIFI_SERIAL.println("AT+CIFSR");
+        String resp2 = "";
+        start = millis();
+        while(millis()-start < 7000){
+          if(WIFI_SERIAL.available()){
+            char c = WIFI_SERIAL.read();
+            //Serial.print(c);
+            resp2 = String(resp2+c);
+          }
+        }
+        if (SERIAL_YES){
+          Serial.println("Device IP Info: ");
+          Serial.println(resp2);
+          Serial.println("Connected!");
+          return true;
+        }
+    }
+    else {
+        if (SERIAL_YES) Serial.println("Cannot connect to wifi");
+        return false;
+    }
+}
+
+
+void listWifis(){
+  wifis="";
+  if (SERIAL_YES) Serial.println("Checking for Wifis!!!");
+   oled.clearBuffer();
+        oled.setFont(u8g2_font_10x20_tf);
+        oled.drawStr(8,30,"Connecting");
+        oled.drawStr(0,50,"to wifi...");
+        oled.sendBuffer();
+  emptyRx();
+  WIFI_SERIAL.println("AT+CWLAP");
+  unsigned long start = millis();
+  while (millis() - start <5000){
+    if (WIFI_SERIAL.available()){
+      char c = WIFI_SERIAL.read();
+      wifis = String(wifis+c);
+    }
+  }
+}
+
+
+void printWifiResponse(){
+  while (WIFI_SERIAL.available()>0){
+    char cByte = WIFI_SERIAL.read();
+    Serial.write(cByte);
+   
+  }
+}
+
+
+// Send an http command
+String httpComm(String domain, int port, String path, String comm) {  
+
+  String response;  
+  emptyRx();          // empty buffer
+  if (setMux(0)) {    // set mux
+    emptyRx();
+    
+    if (startComm(domain, port)) {  // set up tcp
+      emptyRx();
+      
+      
+      if (sendComm(comm, comm.length())) {  //send command
+        response = receiveData(5000);       //receive response
+      } else {
+        Serial.println("Send failed");
+      } 
+    } else {
+      Serial.println("Unable to start connection");
+    }
+  } else {
+    Serial.println("MUX command failed");
+  }
+  WIFI_SERIAL.println("AT+CIPCLOSE");       //close tcp connection
+  return response;
+}
+
+
+
+// Empty ESP8266 buffer
+void emptyRx() {
+    while(WIFI_SERIAL.available() > 0) {
+        WIFI_SERIAL.read();
+    }
+}
+
+
+// Read data from the wifi and test it for any of three target strings
+bool readTest(String target1, String target2, String target3, uint32_t timeout) {
+
+    String data_tmp;
+    data_tmp = readString(target1, target2, target3, timeout);
+    if (data_tmp.indexOf(target1) != -1) {
+        return true;
+    } else if (data_tmp.indexOf(target2) != -1) {
+        return true;
+    } else if (data_tmp.indexOf(target3) != -1) {
+        return true;
+    } else {
+    return false;
+    }
+}
+
+// Read data from the wifi and return that data once any of three target 
+// strings are encountered
+String readString(String target1, String target2, String target3, uint32_t timeout)
+{
+    String data;
+    char a;
+    unsigned long start = millis();
+    while (millis() - start < timeout) {
+        while(WIFI_SERIAL.available() > 0) {
+            a = WIFI_SERIAL.read();
+      if(a == '\0') continue;
+            data += a;
+        }
+        if (data.indexOf(target1) != -1) {
+            break;
+        } else if (data.indexOf(target2) != -1) {
+            break;
+        } else if (data.indexOf(target3) != -1) {
+            break;
+        }
+    }
+    return data;
+}
+
+
+// Set the multiplexing
+bool setMux(int m) {
+  
+  String data;
+  WIFI_SERIAL.print("AT+CIPMUX=");  
+  WIFI_SERIAL.println(m);  
+  data = readString("OK","ERROR","XX",5000);
+   
+  if (data.indexOf("OK") != -1) {
+        return true;
+  }
+  return false;
+}
+
+
+// Set up TCP connection
+bool startComm(String domain, int port) {
+
+  String data;
+  String start_comm = "AT+CIPSTART=\"TCP\",\"" + domain + "\"," + String(port);     //UPDATE THIS LINE
+  WIFI_SERIAL.println(start_comm);
+  if (SERIAL_YES) Serial.println(start_comm);
+
+  data = readString("OK", "ERROR", "ALREADY CONNECT", 10000);
+    if (data.indexOf("OK") != -1 || data.indexOf("ALREADY CONNECT") != -1) {
+        return true;
+    }
+  return false;
+}
+
+
+// Send a GET or POST command
+bool sendComm(String buffer, int len) {
+    WIFI_SERIAL.print("AT+CIPSEND=");   //send length command
+    WIFI_SERIAL.println(len);
+    if (readTest(">", "XX", "XX", 5000)) {    //if we get '>', send rest
+        emptyRx();
+        for (uint32_t i = 0; i < len; i++) {
+            WIFI_SERIAL.write(buffer[i]);
+        }
+        return readTest("SEND OK", "XX", "XX", 10000);
+    }
+    return false;
+}
+
+
+// Read data from wifi and place into string
+String receiveData(uint32_t timeout) {
+  String response;
+  unsigned long start = millis();
+  while (millis() - start <timeout){
+    if (WIFI_SERIAL.available()>0){
+      char c = WIFI_SERIAL.read();
+      Serial.print(c);
+      response=String(response+c);
+    }
+  }
+  return response;
+}
+
+
+String getMAC(uint32_t timeout) {
+  String response;
+  WIFI_SERIAL.println("AT+CIPSTAMAC?");   //send MAC query
+  unsigned long start = millis();
+  
+  while (millis() - start <timeout){
+    if (WIFI_SERIAL.available()>0){
+      char c = WIFI_SERIAL.read();
+      Serial.print(c);
+      response=String(response+c);
+    }
+  }
+  int stringStart = response.indexOf(":") + 2;
+  return response.substring(stringStart,stringStart+17);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* (END POINT) FOR WIFI CONNECTIONS */
+
+/*  (START POINT) FOR GPS DATA  */
+void main_gps(){
+  String d;
+  String data;
+  int count;
+  count =0;
+  
+  while(count<66){
+   while (GPSSerial.available())  
+    {
+  
+      char c = GPSSerial.read(); 
+     d= c;
+      Serial.print(d);
+      data = data + d;
+      //Serial.print("Data length: ");
+      //Serial.println(data.length());
+      
+    }
+  
+   count= count + 1; 
+   
+  }
+  //int test = data.indexOf("$GPRMC");
+  //int ntest = data.indexOf("$GPVTG");
+  //if (test==-1 && ntest==-1){
+  //data ="";
+  //count=0;
+  //goto LOOP;
+    
+
+
+
+  int gps_search_start = data.indexOf("$GPRMC");
+  int latitude_start = data.indexOf("A",gps_search_start)+2;
+  int latitude_end = latitude_start + 2;
+  int latitude_half_start = data.indexOf(".",latitude_end);
+  int latitude_half_end = data.indexOf(",",latitude_half_start)-1;
+  int longitude_start=data.indexOf("N",latitude_half_end)+2;
+  int longitude_end = data.indexOf(".",longitude_start)-2;
+  int longitude_half_start = data.indexOf(".",longitude_end);
+  int longitude_half_end = data.indexOf(",",longitude_half_start);
+  
+  
+  String latitude_half1= data.substring(latitude_start,latitude_end);
+  String latitude_half2 = data.substring(latitude_half_start,latitude_half_end);
+  latitude = latitude_half1+latitude_half2;
+  String longitude_half1= data.substring(longitude_start,longitude_end);
+  String longitude_half2= data.substring(longitude_half_start,longitude_half_end);
+  longitude = longitude_half1 + longitude_half2;
+  
+  
+  
+  Serial.println();
+  Serial.println("Latitude" + latitude);
+  Serial.println("Longitude" + longitude);
+  
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_glasstown_nbp_tr);
+  oled.setCursor(0,11);
+  oled.print("Lattitude" + latitude);
+  oled.setCursor(0,25);
+  oled.print("Longitude" + longitude);
+  oled.sendBuffer();
+  delay(5000);
+  data =""; 
+}
+   
+
+
+
+
+
+
+
+
+
+
+
+/* (END POINT) FOR GPS DATA   */
+/* (START POINT) FOR GAME */
+
+
+void draw(Rect b){ 
+  oled.drawFrame(b.x,b.y,b.w,b.h); 
+}
+
+void drawBall(Circle b){
+  oled.drawCircle(b.x, b.y, b.r, U8G2_DRAW_ALL);
+}
+
+bool intersects(Circle circle, Rect rect) {
+    int circleDistanceX = abs(circle.x - rect.x);
+    int circleDistanceY = abs(circle.y - rect.y);
+
+    if (circleDistanceX > (rect.w/2 + circle.r)) { return false; }
+    if (circleDistanceY > (rect.h/2 + circle.r)) { return false; }
+
+    if (circleDistanceX <= (rect.w/2)) { return true; } 
+    if (circleDistanceY <= (rect.h/2)) { return true; }
+
+    int cornerDistance_sq = (circleDistanceX - rect.w/2)^2 +
+                         (circleDistanceY - rect.h/2)^2;
+
+    return (cornerDistance_sq <= (circle.r^2));
+}
+
+
+ 
+ 
+  
+
+
+void main_game() {
+  
+  
+  while (game_over==false){
+   oled.clearBuffer();//clear
+
+   if(score < 20){
+   //bricks
+   for(int i=0; i<64; i++){
+    if(bricks[i].state == 1){
+      draw(bricks[i]);
+
+      //collission with bricks
+      if(intersects(ball, bricks[i])){
+          //disapear bricks
+          bricks[i].state = 0;
+            
+          //give ball a random velocity
+          ball.vy *= -1;
+          score++;            
+      } 
+    }      
+   }
+
+   //bat
+   bat.x = ball.x - 5;
+   draw(bat);
+
+   //ball
+   ball.x += ball.vx;
+   ball.y += ball.vy;
+   drawBall(ball);
+
+  //check collission with walls
+  if(ball.x+ball.r > 128){ //right
+    ball.x = 128-ball.r;
+    ball.vx *=-1;
+  }
+  else if(ball.x-ball.r < 0){ //left
+    ball.x = ball.r;
+    ball.vx *=-1;
+  }
+  else if(ball.y-ball.r < 0){ //up
+    ball.y = ball.r;
+    ball.vy *=-1;
+  }
+  else if(ball.y+ball.r > 62){ //down
+    ball.y = 62 - ball.r;
+    ball.vy *=-1;
+  }
+
+  //draw score
+  oled.setFont(u8g2_font_pxplustandynewtv_8_all);
+  char buffer [33];
+  oled.drawStr(110, 55, (itoa(score, buffer, 10)));
+
+   }
+   else{
+    game_over=true;
+    oled.setFont(u8g2_font_ncenB10_tr);    
+    oled.drawStr(15, 40, "Game Over !");
+    delay(3000);
+   }
+   
+  oled.sendBuffer();
+  delay(DELAY); //wait a bit
+  
+
+}
+}
+
+
+
+
+/* (END POINT) FOR GAME */
+/* (START POINT) FOR GPS WIFI */
+void main_wifi_gps_GET (){
+
+  if (wifi_good != true){   //if we're not connected to a network
+    if (check()){       //if ESP8266 present
+      listWifis();        
+      if (SERIAL_YES) Serial.println(wifis);
+
+      bool good = connectWifi(SSID,password); //connect to network
+
+      if (good){
+       
+        wifi_good = true; // connected to a network
+      }else{
+        wifi_good=false;
+      }
+    }
+  }
+    
+
+  if (wifi_good){   //if we're connected to a network
+  
+    // web server parameters
+    String domain = "45.118.134.33";
+    int port = 80;
+    String path = "/data?user=oskarkrishnashrestha&filename=test.py&lat=1&lon=1&method=GET&username=oskar";
+
+    // send a GET command, will return weather info
+    String send_comm = 
+    "GET "+ path + " HTTP/1.1\r\n" +
+    "Host: " + domain + "\r\n\r\n";
+
+    get_response = httpComm(domain, port, path, send_comm);
+    if (SERIAL_YES) Serial.println(get_response);
+    
+       
+    int user_start = get_response.indexOf(">")+1;
+    int user_end = get_response.indexOf("!");
+    int latitude_start = user_end +3;
+    int latitude_end = get_response.indexOf("@");
+    int longitude_start = latitude_end + 3;
+    int longitude_end = get_response.indexOf("$");
+    int updatetime_start = longitude_end + 3;
+    int updatetime_end = get_response.indexOf("%");
+     
+    
+        
+    
+    
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_glasstown_nbp_tr);
+    oled.drawStr(25,30,"Loading the information");
+    oled.drawStr(45,50,"form server... ");
+    oled.sendBuffer();
+    delay(3500);
+
+    String user = get_response.substring(user_start,user_end);
+    String latitude = get_response.substring(latitude_start,latitude_end);
+    String longitude = get_response.substring(longitude_start,longitude_end);
+    String updatetime= get_response.substring(updatetime_start,updatetime_end);
+    
+    
+    
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_glasstown_nbp_tr);  
+    oled.setCursor(0,11);
+    oled.print(user);
+    oled.setCursor(0,24);
+    oled.print(latitude);   
+    oled.setCursor(0,37);
+    oled.print(longitude);
+    oled.setCursor(0,50);
+    oled.print(updatetime);
+    oled.sendBuffer();     // update the screen
+    delay(20000);
+    }  
+}
+
+
+
+
+
+
+/* (END POINT) FOR GPS WIFI */
+/* (START POINT) FOR GPS WIFI POST */
+void main_wifi_gps_POST (){
+
+  if (wifi_good != true){   //if we're not connected to a network
+    if (check()){       //if ESP8266 present
+      listWifis();        
+      if (SERIAL_YES) Serial.println(wifis);
+
+      bool good = connectWifi(SSID,password); //connect to network
+
+      if (good){
+       
+        wifi_good = true; // connected to a network
+      }else{
+        wifi_good=false;
+      }
+    }
+  }
+    
+
+  if (wifi_good){   //if we're connected to a network
+  
+    // web server parameters
+    String domain = "45.118.134.33";
+    int port = 80;
+    Serial.println("--> "+latitude);
+    String path = "/data?user=oskarkrishnashrestha&filename=test.py&lat="+latitude+"1&lon="+longitude+"1&method=POST&username=oskar";
+
+    // send a GET command, will return weather info
+    String send_comm = 
+    "GET "+ path + " HTTP/1.1\r\n" +
+    "Host: " + domain + "\r\n\r\n";
+
+    get_response = httpComm(domain, port, path, send_comm);
+    if (SERIAL_YES) Serial.println(get_response);      
+    delay(2000);  
+    }  
+}
+/* (END POINT) FOR GPS WIFI POST */
+
+
+
+
